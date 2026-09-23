@@ -3,21 +3,45 @@
 > or hold explicit written authorization to assess**. Unauthorized use is
 > prohibited and may be illegal. Read [ETHICS.md](ETHICS.md) and
 > [SCOPE.md](SCOPE.md) before use. Use at your own risk; **AS IS**, no warranty.
+
 # I5 — Modbus Scanner
 
-Real Modbus TCP master (raw MBAP frames) with read/write coils+registers, unit-ID scan, function-code enumeration — plus a loopback mock Modbus/TCP slave for fully offline testing. Standard-library only.
+**Modbus/TCP ICS security scanner** by **5h4d0wn1k** for **SCADA assessment**
+and industrial-control education: a raw-MBAP Modbus master with coil/register
+read-write, unit-ID scanning (0–255), function-code enumeration, exception-code
+translation and vendor fingerprinting — plus a loopback mock Modbus/TCP slave
+for fully offline testing. Standard-library only.
 
-## What the engine genuinely does
+## Why a Modbus scanner for ICS
 
-- **Raw MBAP framing** — every packet is hand-built struct `TID(2)+Proto=0(2)+Len(2)+Unit(1)+FC(1)+Data` and parsed back with byte-exact assertions.
-- **Read/Write operations** — `0x01` Read Coils, `0x02` Read Discrete Inputs, `0x03` Read Holding Registers, `0x04` Read Input Registers, `0x05` Write Single Coil, `0x06` Write Single Register, `0x0F` Write Multiple Coils, `0x10` Write Multiple Registers.
-- **Unit-ID scan** — iterates 0–255 against a slave to find responsive unit IDs (Modbus gateways).
-- **Function-code enumeration** — probes each FC against the slave; classifies as SUPPORTED, ILLEGAL (with exception code), or ERROR.
-- **Exception code translation** — maps Modbus exception codes to their protocol names.
-- **Fingerprint** — reads server ID (FC 0x11) and diagnostics (FC 0x08) to identify vendor.
-- **Mock Modbus/TCP slave** — full implementation of a server answering coils/registers, with correct exception responses for out-of-range addresses.
+Modbus is the least common denominator of industrial control networks — and
+frequently exposed with no auth, an open unit namespace and every function
+code enabled. This scanner demonstrates how a master enumerates a slave's
+register map and supported function codes, the exact operations defenders must
+audit (reads you can template, writes you must gate), and how exception
+responses leak capability. All write operations default OFF and require an
+explicit target, keeping exercises safe for lab rigs. Scope it strictly to
+devices you own or hold written authorization to assess — see
+[ETHICS.md](ETHICS.md) and [SCOPE.md](SCOPE.md).
 
-## Quick start
+## Features
+
+- **Raw MBAP framing** — every packet hand-built as
+  `TID(2)+Proto(0)(2)+Len(2)+Unit(1)+FC(1)+Data` and parsed back
+  byte-exact (`ModbusTCP`).
+- **Read/write operations** — `0x01`/`0x02`/`0x03`/`0x04` reads plus
+  `0x05`/`0x06`/`0x0F`/`0x10` single and multi-writes.
+- **Function-code enumeration** — probes each FC and classifies SUPPORTED,
+  ILLEGAL (with exception code) or ERROR (`scan_function_codes`).
+- **Unit-ID scan** — iterates `0–255` to surface responsive gateway unit IDs.
+- **Exception translation** — maps Modbus exception codes to protocol names.
+- **Fingerprinting** — reads Report Server ID (`0x11`) and diagnostics
+  (`0x08`) to identify the vendor.
+- **Mock Modbus/TCP slave** — answers coils/registers with correct exception
+  responses for out-of-range addresses (`MockModbusSlave`).
+- **JSON reports** — write structured findings to `reports/`.
+
+## Quickstart
 
 ```bash
 # Offline demo: mock slave, full scan, writes reports/, exit 0
@@ -26,16 +50,16 @@ python3 modbus_scan.py --demo
 # Scan function codes against a lab Modbus device
 python3 modbus_scan.py 192.0.2.100 -p 502 -u 1 --scan-fc
 
-# Read holding registers
+# Read holding registers (address 0, count 10)
 python3 modbus_scan.py 192.0.2.100 --read-holding 0 10 --json
 
 # Unit-ID scan
 python3 modbus_scan.py 192.0.2.100 --scan-units
 
-# Write register 5 = 0xABCD (destructive — default OFF; explicit only)
+# Write register 5 = 0xABCD (destructive; explicit target required)
 python3 modbus_scan.py 192.0.2.100 --write-reg 5 43981
 
-# Tests
+# Run the test suite (12 deterministic offline tests)
 python3 -m unittest discover -s tests
 ```
 
@@ -49,45 +73,37 @@ python3 modbus_scan.py [-h] [--demo] [host] [-p PORT] [-u UNIT] [-t SEC]
                        [--scan-units] [--fingerprint] [--json] [--report-dir DIR]
 ```
 
-- `--demo` — offline loopback demo, exit 0.
-- `--json` — write JSON report to `reports/`.
-- `--write-reg`, `--write-coil` — destructive ops, require explicit target host+port.
+- `--demo` — offline loopback demo, exit `0`.
+- `--json` — write a JSON report to `reports/`.
+- `--write-reg`, `--write-coil` — destructive operations, require an explicit
+  target host and port.
 
-Exit codes: `0` success (incl. demo), non-zero on errors.
+Exit codes: `0` on success (including the demo), non-zero on errors.
 
-## Live Lab Test Plan
+## Project structure
 
-Prerequisites: a Modbus/TCP device you own (libmodbus `mbtserver`, ModRSsim, or the bundled mock).
+```
+modbus_scan.py      # MBAP framing, scanner engine, mock slave, CLI
+tests/              # unittest coverage: wire bytes, ops, exceptions, demo
+ETHICS.md           # educational-use policy (read first)
+SCOPE.md            # scope and target authorization rules
+```
 
-1. **Baseline**: `python3 modbus_scan.py --demo` — confirm unit 1 responds, at least 4 FCs are SUPPORTED, registers match the mock image (0,2,4,6…), and the demo JSON report is written (exit 0).
-2. **Real slave**: `mbtserver -p 1983` on a lab host, then
-   `python3 modbus_scan.py 127.0.0.1 1983 --scan-fc`. Cross-check with
-   `mbtclient 127.0.0.1 1983 -a 0x03 -d 00000004`.
-3. **Exception path**: read beyond the slave address range — confirm Illegal Data Address (exception 2) is returned correctly.
-4. **Multi-register write**: `--write-reg 10 0xBEEF` then `--read-holding 10 1` on the same slave; verify the echo and read-back match.
-5. **Regression**: re-run `python3 -m unittest discover -s tests`.
+## Documentation
 
-## Metrics
+- [ETHICS.md](ETHICS.md) — acceptable and prohibited use.
+- [SCOPE.md](SCOPE.md) — authorized target scope.
+- [SECURITY.md](SECURITY.md) — responsible disclosure.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guide.
 
-| Metric                     | Value |
-|----------------------------|-------|
-| Standard-library only      | Yes   |
-| Third-party deps           | none  |
-| Deterministic offline tests| 13    |
-| Loopback mock slave        | built-in (`MockModbusSlave`) |
-| Offline demo exit          | 0     |
-| Report output              | `reports/*.json` (gitignored) |
-| Wire format                | Modbus/TCP (MBAP + PDU) |
-| Frame byte-exact           | Yes — tests verify TID, proto, length, unit, FC |
+## Contributing
 
-## IMPORTANT: Read before use.
-
-Educational, authorization-required tooling. Only test Modbus devices you own or
-are explicitly authorized to assess. Write operations (`--write-reg`,
-`--write-coil`) are destructive and default OFF. See `LICENSE` for the full
-shield — Authorization, CFAA / computer-crime statutes, Acceptable Use,
-Prohibited Use, No Warranty, and Responsible Disclosure.
+New function-code mappings, register-map fixtures and mock-slave behaviors are
+welcome. Open an issue or PR against the default branch; keep contributions
+scoped to educational and authorized-use tooling.
 
 ## License
 
-MIT — full legal shield in `LICENSE`.
+MIT — full legal shield in [LICENSE](LICENSE). Educational, authorization-
+required software for assessing Modbus/TCP infrastructure you own or are
+explicitly permitted to test.
